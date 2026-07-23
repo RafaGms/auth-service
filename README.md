@@ -1,98 +1,107 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# auth-service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Serviço de autenticação em **NestJS** com JWT (access + refresh), rotação de refresh token, revogação via Redis, RBAC e rate limiting no login.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Vai além do login básico: trata revogação de sessão, rotação de token e força bruta como parte do problema, não como extra. Abaixo estão as peças implementadas e o porquê de cada uma.
 
-## Description
+## O que tem implementado
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- **JWT access + refresh** — access token curto (15 min) e stateless, validado só pela assinatura, sem ida ao banco. Refresh longo (7 dias) e com estado, controlado via Redis.
+- **Rotação de refresh token** — a cada uso, o refresh antigo é invalidado e um novo par é emitido. É o detalhe que separa um auth júnior de um pleno: sem rotação, um token vazado continua válido até expirar sozinho.
+- **Revogação via Redis** — cada refresh emitido guarda um `jti` como chave no Redis. Validar é checar se a chave existe; revogar é apagá-la. Logout limpa todas as chaves do usuário, derrubando todas as sessões de uma vez.
+- **RBAC** — guard + decorator `@Roles()`, com `/auth/admin` como rota de exemplo restrita a admins.
+- **Rate limit no login** — 5 tentativas por minuto por IP na rota de login; o resto da API usa um limite global mais folgado.
+- **argon2** para hash de senha, **Swagger** em `/docs`, **docker-compose** com Postgres + Redis para subir o ambiente local com um comando.
 
-## Project setup
+## Stack
 
-```bash
-$ yarn install
-```
+- **NestJS** + **TypeScript**
+- **PostgreSQL** via **TypeORM** — persistência de usuários
+- **Redis** (ioredis) — whitelist e revogação de refresh tokens
+- **argon2** — hash de senha
+- **Passport JWT** — validação do access token
+- **@nestjs/throttler** — rate limiting
+- **Swagger** — documentação em `/docs`
+- **Jest** — testes unitários
 
-## Compile and run the project
+## Decisões de arquitetura
 
-```bash
-# development
-$ yarn run start
+**Por que access e refresh separados?**
+O access token vive 15 minutos e não tem estado — é validado só pela assinatura, sem consulta ao banco ou ao Redis. Isso mantém as rotas protegidas rápidas, sem I/O extra a cada request. O refresh vive 7 dias e tem estado no Redis, o que permite revogar algo que o access sozinho nunca permitiria.
 
-# watch mode
-$ yarn run start:dev
+**Por que rotação de refresh token?**
+A cada renovação, o refresh usado é invalidado e um par novo é emitido. Se um refresh vazar e alguém usá-lo antes do dono legítimo, na próxima tentativa do dono o token dele já não é mais válido — o vazamento vira um erro visível em vez de continuar silencioso até o token expirar.
 
-# production mode
-$ yarn run start:prod
-```
+**Por que Redis para os refresh tokens?**
+Um JWT puro é stateless por definição: uma vez emitido, não tem como invalidar antes da expiração. Guardando o `jti` de cada refresh como chave no Redis com TTL, ganho a capacidade de revogar (deletar a chave) e de fazer logout global (apagar todas as chaves do usuário) sem precisar transformar o access token em algo stateful.
 
-## Run tests
+**Por que argon2 e não bcrypt?**
+argon2id é o algoritmo recomendado atualmente pra hash de senha, com resistência melhor a ataques paralelizados em GPU. bcrypt ainda é aceitável, mas a troca aqui é intencional — reflete a recomendação atual, não só hábito.
 
-```bash
-# unit tests
-$ yarn run test
+**Por que rate limit só no login?**
+Login é o alvo natural de força bruta: é a rota que aceita credencial errada silenciosamente. Limitei a 5 tentativas por minuto por IP ali; nas demais rotas um limite global mais folgado já é suficiente.
 
-# e2e tests
-$ yarn run test:e2e
+## Como rodar
 
-# test coverage
-$ yarn run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Requisitos: Node 20+, Docker.
 
 ```bash
-$ yarn install -g mau
-$ mau deploy
+# 1. Sobe Postgres e Redis
+docker compose up -d
+
+# 2. Configura o ambiente
+cp .env.example .env
+
+# 3. Instala e roda
+yarn install
+yarn start:dev
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+A API sobe em `http://localhost:3000` e a documentação Swagger em `http://localhost:3000/docs`.
 
-## Resources
+## Endpoints
 
-Check out a few resources that may come in handy when working with NestJS:
+| Método | Rota | Descrição | Protegida |
+|---|---|---|---|
+| POST | `/auth/register` | Cria usuário e retorna par de tokens | — |
+| POST | `/auth/login` | Autentica (máx. 5 tentativas/min) | — |
+| POST | `/auth/refresh` | Troca refresh por novo par (com rotação) | — |
+| POST | `/auth/logout` | Revoga todos os refresh tokens do usuário | access token |
+| GET | `/auth/me` | Dados do usuário autenticado | access token |
+| GET | `/auth/admin` | Rota de exemplo restrita por RBAC | access token + role admin |
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## Exemplo de fluxo
 
-## Support
+```bash
+# Registrar
+curl -X POST localhost:3000/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"rafael@exemplo.com","password":"senha-forte-123"}'
+# -> { "accessToken": "...", "refreshToken": "..." }
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+# Acessar rota protegida
+curl localhost:3000/auth/me -H 'Authorization: Bearer <accessToken>'
 
-## Stay in touch
+# Renovar (o refresh antigo deixa de valer após esta chamada)
+curl -X POST localhost:3000/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken":"<refreshToken>"}'
+```
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## Testes
 
-## License
+```bash
+yarn test
+```
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Os testes cobrem as regras de autenticação (credencial inválida, senha incorreta, emissão de token em login válido), isolando as dependências com mocks.
+
+## Próximos passos
+
+- Testes de integração com Testcontainers (Postgres e Redis reais em vez de mock)
+- Verificação de e-mail e fluxo de recuperação de senha
+- Detecção de reuso de refresh token (revogar toda a família de tokens ao detectar replay)
+
+---
+
+Feito por [Rafael Gomes](https://github.com/RafaGms).
